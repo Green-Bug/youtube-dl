@@ -5,7 +5,6 @@ from __future__ import absolute_import, unicode_literals
 
 import collections
 import contextlib
-import copy
 import datetime
 import errno
 import fileinput
@@ -721,7 +720,7 @@ class YoutubeDL(object):
             return None
 
     def _match_entry(self, info_dict, incomplete):
-        """ Returns None iff the file should be downloaded """
+        """ Returns None if the file should be downloaded """
 
         video_title = info_dict.get('title', info_dict.get('id', 'video'))
         if 'title' in info_dict:
@@ -1034,6 +1033,21 @@ class YoutubeDL(object):
         else:
             raise Exception('Invalid result type: %s' % result_type)
 
+    def compatible_formats(self, formats):
+        video, audio = formats
+        # Check extension
+        video_ext, audio_ext = video.get('ext'), audio.get('ext')
+        if video_ext and audio_ext:
+            COMPATIBLE_EXTS = (
+                ('mp3', 'mp4', 'm4a', 'm4p', 'm4b', 'm4r', 'm4v', 'ismv', 'isma'),
+                ('webm')
+            )
+            for exts in COMPATIBLE_EXTS:
+                if video_ext in exts and audio_ext in exts:
+                    return True
+        # TODO: Check acodec/vcodec
+        return False
+
     def _build_format_filter(self, filter_spec):
         " Returns a function to filter the formats according to the filter_spec "
 
@@ -1277,6 +1291,12 @@ class YoutubeDL(object):
                             if f.get('vcodec') == 'none']
                         if audio_formats:
                             yield audio_formats[-1]
+                    elif format_spec == 'bestcompataudio':
+                        audio_formats = [
+                            f for f in formats
+                            if f.get('vcodec') == 'none' and self.compatible_formats([ctx['selected_video'], f])]
+                        if audio_formats:
+                            yield audio_formats[-1]
                     elif format_spec == 'worstaudio':
                         audio_formats = [
                             f for f in formats
@@ -1288,6 +1308,7 @@ class YoutubeDL(object):
                             f for f in formats
                             if f.get('acodec') == 'none']
                         if video_formats:
+                            ctx['selected_video'] = video_formats[-1]
                             yield video_formats[-1]
                     elif format_spec == 'worstvideo':
                         video_formats = [
@@ -1345,16 +1366,16 @@ class YoutubeDL(object):
 
                 def selector_function(ctx):
                     for pair in itertools.product(
-                            video_selector(copy.deepcopy(ctx)), audio_selector(copy.deepcopy(ctx))):
+                            video_selector(ctx), audio_selector(ctx)):
                         yield _merge(pair)
 
             filters = [self._build_format_filter(f) for f in selector.filters]
 
             def final_selector(ctx):
-                ctx_copy = copy.deepcopy(ctx)
+                ctx['formats'] = list(ctx['all_formats'])
                 for _filter in filters:
-                    ctx_copy['formats'] = list(filter(_filter, ctx_copy['formats']))
-                return selector_function(ctx_copy)
+                    ctx['formats'] = list(filter(_filter, ctx['formats']))
+                return selector_function(ctx)
             return final_selector
 
         stream = io.BytesIO(format_spec.encode('utf-8'))
@@ -1627,7 +1648,9 @@ class YoutubeDL(object):
 
         ctx = {
             'formats': formats,
+            'all_formats': list(formats),
             'incomplete_formats': incomplete_formats,
+            'selected_video': None,
         }
 
         formats_to_download = list(format_selector(ctx))
@@ -1876,28 +1899,13 @@ class YoutubeDL(object):
                     else:
                         postprocessors = [merger]
 
-                    def compatible_formats(formats):
-                        video, audio = formats
-                        # Check extension
-                        video_ext, audio_ext = video.get('ext'), audio.get('ext')
-                        if video_ext and audio_ext:
-                            COMPATIBLE_EXTS = (
-                                ('mp3', 'mp4', 'm4a', 'm4p', 'm4b', 'm4r', 'm4v', 'ismv', 'isma'),
-                                ('webm')
-                            )
-                            for exts in COMPATIBLE_EXTS:
-                                if video_ext in exts and audio_ext in exts:
-                                    return True
-                        # TODO: Check acodec/vcodec
-                        return False
-
                     filename_real_ext = os.path.splitext(filename)[1][1:]
                     filename_wo_ext = (
                         os.path.splitext(filename)[0]
                         if filename_real_ext == info_dict['ext']
                         else filename)
                     requested_formats = info_dict['requested_formats']
-                    if self.params.get('merge_output_format') is None and not compatible_formats(requested_formats):
+                    if self.params.get('merge_output_format') is None and not self.compatible_formats(requested_formats):
                         info_dict['ext'] = 'mkv'
                         self.report_warning(
                             'Requested formats are incompatible for merge and will be merged into mkv.')
